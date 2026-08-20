@@ -9,6 +9,7 @@ const {
   getMyComplaints,
   updateComplaint,
   resolveComplaint,
+  mergeComplaints,
   rateComplaint,
   getPublicStats,
 } = require('../controllers/complaintController');
@@ -20,6 +21,7 @@ router.get('/', requireAuthority, getAllComplaints);
 router.get('/:complaintId', getComplaint);
 router.patch('/:complaintId', requireAuthority, updateComplaint);
 router.post('/:complaintId/resolve', requireAuthority, upload.single('resolutionPhoto'), resolveComplaint);
+router.post('/:complaintId/merge', requireAuthority, mergeComplaints);
 router.patch('/:complaintId/rate', rateComplaint);
 
 module.exports = router;

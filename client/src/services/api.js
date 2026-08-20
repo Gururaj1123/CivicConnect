@@ -165,6 +165,19 @@ export async function resolveComplaint(complaintId, photoFile) {
   }
 }
 
+export async function mergeComplaints(complaintId, duplicateIds) {
+  try {
+    const { data } = await api.post(
+      `/complaints/${encodeURIComponent(complaintId)}/merge`,
+      { duplicateIds },
+      { headers: authHeader('cc_authority_token') }
+    );
+    return data;
+  } catch (err) {
+    return friendlyError(err, 'Could not merge these complaints right now.');
+  }
+}
+
 // ---- Free reverse geocoding (OpenStreetMap Nominatim - no API key needed) ----
 
 export async function reverseGeocode(latitude, longitude) {

@@ -3,7 +3,7 @@ import { useParams, Navigate, Link } from 'react-router-dom';
 import StatusBadge from '../components/StatusBadge.jsx';
 import PriorityBadge from '../components/PriorityBadge.jsx';
 import LocationMap from '../components/LocationMap.jsx';
-import { getComplaint, updateComplaint, resolveComplaint, isAuthorityLoggedIn } from '../services/api.js';
+import { getComplaint, updateComplaint, resolveComplaint, mergeComplaints, isAuthorityLoggedIn } from '../services/api.js';
 
 const DEPARTMENTS = [
   'Public Works Department',
@@ -24,6 +24,9 @@ export default function ComplaintReview() {
   const [showResolveModal, setShowResolveModal] = useState(false);
   const [resolutionPhoto, setResolutionPhoto] = useState(null);
   const [resolutionPreview, setResolutionPreview] = useState(null);
+  const [resolutionError, setResolutionError] = useState('');
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [selectedDuplicates, setSelectedDuplicates] = useState([]);
   const [actionLoading, setActionLoading] = useState(false);
 
   async function loadComplaint() {
@@ -74,20 +77,54 @@ export default function ComplaintReview() {
   function handleResolutionPhotoChange(e) {
     const file = e.target.files[0];
     if (!file) return;
+
+    setResolutionError('');
     setResolutionPhoto(file);
     setResolutionPreview(URL.createObjectURL(file));
   }
 
   async function handleConfirmResolve() {
+    if (!resolutionPhoto) {
+      setResolutionError('Resolution photo is required before marking the complaint as resolved.');
+      return;
+    }
+
+    setResolutionError('');
     setActionLoading(true);
+
     const result = await resolveComplaint(complaintId, resolutionPhoto);
+
     setActionLoading(false);
-    setShowResolveModal(false);
-    setResolutionPhoto(null);
-    setResolutionPreview(null);
+
     if (result.success) {
+      setShowResolveModal(false);
+      setResolutionPhoto(null);
+      setResolutionPreview(null);
       setComplaint(result.complaint);
       setMessage('Complaint successfully resolved.');
+    } else {
+      setError(result.message);
+    }
+  }
+
+  function toggleDuplicateSelection(id) {
+    setSelectedDuplicates((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
+
+  async function handleConfirmMerge() {
+    if (selectedDuplicates.length === 0) return;
+
+    setActionLoading(true);
+    const result = await mergeComplaints(complaintId, selectedDuplicates);
+    setActionLoading(false);
+
+    if (result.success) {
+      setShowMergeModal(false);
+      setComplaint(result.complaint);
+      setMessage(`Merged ${selectedDuplicates.length} complaint(s) into this one. Any future status update here applies to all of them.`);
+      setSelectedDuplicates([]);
     } else {
       setError(result.message);
     }
@@ -102,7 +139,27 @@ export default function ComplaintReview() {
       <h1>Complaint Review</h1>
       {message && <p className="success-banner">{message}</p>}
 
-      {complaint.possibleDuplicates?.length > 0 && (
+      {complaint.mergedInto && (
+        <p className="duplicate-note">
+          🔗 This complaint has been merged into <Link to={`/authority/review/${complaint.mergedInto}`}>{complaint.mergedInto}</Link>.
+          Manage status/department/resolution from there — it will automatically apply here too.
+        </p>
+      )}
+
+      {complaint.mergedComplaints?.length > 0 && (
+        <p className="duplicate-note">
+          🔗 This complaint covers {complaint.mergedComplaints.length} merged report(s):{' '}
+          {complaint.mergedComplaints.map((id, i) => (
+            <span key={id}>
+              <Link to={`/authority/review/${id}`}>{id}</Link>
+              {i < complaint.mergedComplaints.length - 1 ? ', ' : ''}
+            </span>
+          ))}
+          . Any status change you make here applies to all of them.
+        </p>
+      )}
+
+      {!complaint.mergedInto && complaint.possibleDuplicates?.length > 0 && (
         <p className="duplicate-note">
           ⚠️ {complaint.possibleDuplicates.length} similar unresolved complaint(s) reported nearby:{' '}
           {complaint.possibleDuplicates.map((id, i) => (
@@ -111,6 +168,10 @@ export default function ComplaintReview() {
               {i < complaint.possibleDuplicates.length - 1 ? ', ' : ''}
             </span>
           ))}
+          {' '}
+          <button type="button" className="btn-link" onClick={() => { setSelectedDuplicates([]); setShowMergeModal(true); }}>
+            Merge these into one
+          </button>
         </p>
       )}
 
@@ -150,12 +211,17 @@ export default function ComplaintReview() {
         )}
       </div>
 
-      {/* Authority-only actions - never rendered on citizen-facing pages */}
-      <div className="review-actions">
-        <button className="btn btn-primary" onClick={() => setShowAssignModal(true)} disabled={actionLoading}>Assign to Department</button>
-        <button className="btn btn-secondary" onClick={handleMarkInProgress} disabled={actionLoading || complaint.status === 'REPORTED'}>Mark In Progress</button>
-        <button className="btn btn-success" onClick={() => setShowResolveModal(true)} disabled={actionLoading || complaint.status === 'RESOLVED'}>Mark Resolved</button>
-      </div>
+      {/* Authority-only actions - never rendered on citizen-facing pages, and hidden if this complaint was merged into another */}
+      {!complaint.mergedInto && (
+        <div className="review-actions">
+          <button className="btn btn-primary" onClick={() => setShowAssignModal(true)} disabled={actionLoading}>Assign to Department</button>
+          <button className="btn btn-secondary" onClick={handleMarkInProgress} disabled={actionLoading || complaint.status === 'REPORTED'}>Mark In Progress</button>
+          <button className="btn btn-success" onClick={() => {
+            setResolutionError('');
+            setShowResolveModal(true);
+          }} disabled={actionLoading || complaint.status === 'RESOLVED'}>Mark Resolved</button>
+        </div>
+      )}
 
       {showAssignModal && (
         <div className="modal-overlay" onClick={() => setShowAssignModal(false)}>
@@ -178,22 +244,93 @@ export default function ComplaintReview() {
         <div className="modal-overlay" onClick={() => setShowResolveModal(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Mark as Resolved</h3>
-            <p className="modal-hint">Optionally attach a photo showing the completed work.</p>
+
+            <p className="modal-hint">
+              A resolution photo is required as proof that the complaint has been resolved.
+            </p>
+
             {!resolutionPreview ? (
               <label className="btn btn-secondary upload-btn">
-                📷 Upload Resolution Photo
-                <input type="file" accept="image/*" capture="environment" onChange={handleResolutionPhotoChange} hidden />
+                📷 Upload Resolution Photo <span style={{ color: 'red' }}>*</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleResolutionPhotoChange}
+                  hidden
+                />
               </label>
             ) : (
               <div className="photo-preview">
                 <img src={resolutionPreview} alt="Resolution proof preview" />
-                <button type="button" className="btn-link" onClick={() => { setResolutionPhoto(null); setResolutionPreview(null); }}>Remove photo</button>
+                <button
+                  type="button"
+                  className="btn-link"
+                  onClick={() => {
+                    setResolutionPhoto(null);
+                    setResolutionPreview(null);
+                    setResolutionError('');
+                  }}
+                >
+                  Remove photo
+                </button>
               </div>
             )}
+
+            {resolutionError && (
+              <p className="field-error">{resolutionError}</p>
+            )}
+
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setShowResolveModal(false)}>Cancel</button>
-              <button className="btn btn-success" onClick={handleConfirmResolve} disabled={actionLoading}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setShowResolveModal(false);
+                  setResolutionError('');
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="btn btn-success"
+                onClick={handleConfirmResolve}
+                disabled={actionLoading || !resolutionPhoto}
+              >
                 {actionLoading ? 'Resolving…' : 'Confirm Resolved'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMergeModal && (
+        <div className="modal-overlay" onClick={() => setShowMergeModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Merge Duplicate Complaints</h3>
+            <p className="modal-hint">
+              Select which of these to merge into {complaint.complaintId}. Once merged, any status/department/resolve change you make here applies to all selected complaints, and every citizen who reported one sees the same status.
+            </p>
+
+            {complaint.possibleDuplicates.map((id) => (
+              <label key={id} style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '10px 0' }}>
+                <input
+                  type="checkbox"
+                  checked={selectedDuplicates.includes(id)}
+                  onChange={() => toggleDuplicateSelection(id)}
+                />
+                {id}
+              </label>
+            ))}
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setShowMergeModal(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                onClick={handleConfirmMerge}
+                disabled={actionLoading || selectedDuplicates.length === 0}
+              >
+                {actionLoading ? 'Merging…' : `Merge ${selectedDuplicates.length || ''}`}
               </button>
             </div>
           </div>

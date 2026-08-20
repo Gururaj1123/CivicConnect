@@ -142,6 +142,11 @@ async function updateComplaint(req, res) {
       return res.status(404).json({ success: false, message: 'Complaint not found.' });
     }
 
+    // Cascade the same change to any complaints merged into this one
+    if (complaint.mergedComplaints?.length > 0) {
+      await Complaint.updateMany({ complaintId: { $in: complaint.mergedComplaints } }, update);
+    }
+
     return res.json({ success: true, complaint });
   } catch (err) {
     console.error('updateComplaint error:', err);
@@ -167,10 +172,57 @@ async function resolveComplaint(req, res) {
       return res.status(404).json({ success: false, message: 'Complaint not found.' });
     }
 
+    // Cascade the same change to any complaints merged into this one
+    if (complaint.mergedComplaints?.length > 0) {
+      await Complaint.updateMany({ complaintId: { $in: complaint.mergedComplaints } }, update);
+    }
+
     return res.json({ success: true, complaint });
   } catch (err) {
     console.error('resolveComplaint error:', err);
     return res.status(500).json({ success: false, message: 'Unable to resolve this complaint right now.' });
+  }
+}
+
+// POST /api/complaints/:complaintId/merge  (authority only)
+// Links other complaints (same issue, reported separately) to this one. From
+// then on, any status/department/resolve change made on this complaint is
+// automatically copied onto every complaint merged into it, so the authority
+// only has to manage one, and every citizen who reported it sees the same
+// live status when they track their own Complaint ID.
+async function mergeComplaints(req, res) {
+  try {
+    const { duplicateIds } = req.body;
+
+    if (!Array.isArray(duplicateIds) || duplicateIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please select at least one complaint to merge.' });
+    }
+
+    const primary = await Complaint.findOne({ complaintId: req.params.complaintId });
+    if (!primary) {
+      return res.status(404).json({ success: false, message: 'Complaint not found.' });
+    }
+
+    // Point each duplicate at the primary and immediately sync its current
+    // status/department/resolution so they're in sync from the moment of merging.
+    await Complaint.updateMany(
+      { complaintId: { $in: duplicateIds } },
+      {
+        mergedInto: primary.complaintId,
+        status: primary.status,
+        department: primary.department,
+        resolvedAt: primary.resolvedAt,
+        resolutionPhotoUrl: primary.resolutionPhotoUrl,
+      }
+    );
+
+    primary.mergedComplaints = Array.from(new Set([...(primary.mergedComplaints || []), ...duplicateIds]));
+    await primary.save();
+
+    return res.json({ success: true, complaint: primary });
+  } catch (err) {
+    console.error('mergeComplaints error:', err);
+    return res.status(500).json({ success: false, message: 'Could not merge these complaints right now.' });
   }
 }
 
@@ -236,6 +288,7 @@ module.exports = {
   getMyComplaints,
   updateComplaint,
   resolveComplaint,
+  mergeComplaints,
   rateComplaint,
   getPublicStats,
 };

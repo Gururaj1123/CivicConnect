@@ -80,6 +80,14 @@ const complaintSchema = new mongoose.Schema(
       type: [String], // complaintIds of nearby, unresolved, same-category complaints at submission time
       default: [],
     },
+    mergedInto: {
+      type: String,
+      default: null, // if set, this complaint follows the status of the complaintId named here
+    },
+    mergedComplaints: {
+      type: [String],
+      default: [], // for a "primary" complaint: complaintIds merged into it
+    },
   },
   { timestamps: true } // adds createdAt, updatedAt
 );
