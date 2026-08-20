@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import LocationPicker from './LocationPicker.jsx';
 import PhotoUploader from './PhotoUploader.jsx';
@@ -24,6 +24,59 @@ export default function ComplaintForm() {
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  const [isListening, setIsListening] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
+  const recognitionRef = useRef(null);
+
+  // Stop the mic if the user navigates away mid-recording
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+    };
+  }, []);
+
+  function handleVoiceInput() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setVoiceError('Voice input isn\u2019t supported in this browser. Try Chrome or Edge, or type your description instead.');
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    setVoiceError('');
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+
+    recognition.onerror = (event) => {
+      setIsListening(false);
+      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+        setVoiceError('Microphone permission was denied. Please allow microphone access and try again.');
+      } else if (event.error === 'no-speech') {
+        setVoiceError('No speech detected. Please try again.');
+      } else {
+        setVoiceError('Voice input failed. Please try again or type instead.');
+      }
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setDescription((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  }
 
   function validate() {
     const next = {};
@@ -70,14 +123,27 @@ export default function ComplaintForm() {
       </div>
 
       <div className="form-group">
-        <label className="field-label" htmlFor="description">Description</label>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+          <label className="field-label" htmlFor="description" style={{ marginBottom: 0 }}>Description</label>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleVoiceInput}
+            style={isListening ? { background: '#fee2e2', color: '#dc2626' } : undefined}
+          >
+            {isListening ? '⏹ Stop Listening' : '🎤 Speak Instead'}
+          </button>
+        </div>
         <textarea
           id="description"
           rows={4}
-          placeholder="Describe the issue…"
+          placeholder="Describe the issue, or tap the mic to speak it…"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
+          style={{ marginTop: '10px' }}
         />
+        {isListening && <p className="demo-note" style={{ color: '#dc2626' }}>🔴 Listening… speak now.</p>}
+        {voiceError && <p className="field-error">{voiceError}</p>}
         {errors.description && <p className="field-error">{errors.description}</p>}
       </div>
 
